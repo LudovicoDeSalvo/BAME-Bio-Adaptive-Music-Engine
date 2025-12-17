@@ -1,2 +1,26 @@
-/HKU956/2. audio_files
-/HKU956
+# Datasets and large artifacts
+/HKU956/
+/HKU956.zip
+/data/raw/
+/data/processed/
+/models/
+/artifacts/
+/outputs/
+/runs/
+/logs/
+
+# Large binary/model files
+*.npz
+*.npy
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.pkl
+*.joblib
+*.onnx
+
+# Archive bundles
+*.zip
+*.tar
+*.tar.gz

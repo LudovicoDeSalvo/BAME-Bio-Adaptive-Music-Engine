@@ -1,0 +1,42 @@
+{
+  "paths": {
+    "data_root": "data/raw/HKU956",
+    "processed_dir": "data/processed",
+    "audio_dir": "data/raw/HKU956/2. audio_files",
+    "audio_csv": "data/raw/HKU956/2. original_song_audio.csv",
+    "ratings_csv": "data/raw/HKU956/3. AV_ratings.csv",
+    "personality_csv": "data/raw/HKU956/4. participant_personality.csv",
+    "embeddings_path": "data/processed/audio_embeddings.npz",
+    "index_path": "data/processed/audio_index.npz",
+    "physio_cache": "data/processed/physio_cache.npz",
+    "profile_cache": "data/processed/profile_cache.csv",
+    "context_model_path": "models/context_model.json",
+    "physio_model_path": "models/physio_encoder.json",
+    "profile_model_path": "models/profile_model.json",
+    "world_model_path": "models/world_model.json",
+    "sac_model_path": "models/sac_agent.json"
+  },
+  "model": {
+    "audio_embedding_dim": 128,
+    "physio_embedding_dim": 64,
+    "profile_embedding_dim": 16,
+    "context_embedding_dim": 32,
+    "action_dim": 128
+  },
+  "training": {
+    "seed": 42,
+    "batch_size": 32,
+    "window_seconds": 10,
+    "window_stride_seconds": 5,
+    "sample_rate_hz": {
+      "bvp": 64,
+      "eda": 4,
+      "temp": 4,
+      "hr": 1
+    },
+    "limits": {
+      "max_records": 400,
+      "max_windows_per_record": 5
+    }
+  }
+}
