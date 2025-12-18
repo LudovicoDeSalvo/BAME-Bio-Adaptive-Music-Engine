@@ -1,55 +1,51 @@
-from __future__ import annotations
-
-import os
-from typing import List, Tuple
-
 import numpy as np
+import faiss
+import os
 
+EMBEDDING_PATH = "data/processed/song_embeddings.npy"
+ID_MAP_PATH = "data/processed/song_id_map.npy"
 
-class AudioIndex:
-    def __init__(self) -> None:
-        self.embeddings: np.ndarray | None = None
-        self.song_ids: np.ndarray | None = None
-        self._faiss = None
-        self._index = None
+class MusicRetrieval:
+    def __init__(self):
+        self.index = None
+        self.song_ids = None
+        self.load_index()
 
-    def build(self, embeddings: np.ndarray, song_ids: np.ndarray) -> None:
-        embeddings = np.asarray(embeddings, dtype=np.float32)
-        song_ids = np.asarray(song_ids, dtype=int)
-        self.embeddings = embeddings
-        self.song_ids = song_ids
-        try:
-            import faiss  # type: ignore
+    def load_index(self):
+        """Loads pre-computed embeddings and builds FAISS index."""
+        if not os.path.exists(EMBEDDING_PATH):
+            raise FileNotFoundError(f"Run 'process-audio' first! Missing: {EMBEDDING_PATH}")
 
-            self._faiss = faiss
-            self._index = faiss.IndexFlatL2(embeddings.shape[1])
-            self._index.add(embeddings)
-        except Exception:
-            self._faiss = None
-            self._index = None
+        # Load data
+        self.embeddings = np.load(EMBEDDING_PATH).astype('float32')
+        self.song_ids = np.load(ID_MAP_PATH)
+        
+        # Dimension of MERT embeddings (usually 768 or 1024 depending on layer)
+        d = self.embeddings.shape[1] 
+        
+        # Build Index (L2 Distance = Euclidean)
+        self.index = faiss.IndexFlatL2(d)
+        self.index.add(self.embeddings)
+        print(f"MusicRetrieval: Index built with {self.index.ntotal} songs.")
 
-    def query(self, vector: np.ndarray, k: int = 5) -> List[Tuple[int, float]]:
-        if self.embeddings is None or self.song_ids is None:
-            raise RuntimeError("Index not built")
-        vector = np.asarray(vector, dtype=np.float32).reshape(1, -1)
-        k = min(k, self.embeddings.shape[0])
-        if self._index is not None:
-            distances, indices = self._index.search(vector, k)
-            return [(int(self.song_ids[i]), float(distances[0, idx])) for idx, i in enumerate(indices[0])]
-        diffs = self.embeddings - vector
-        distances = np.sum(diffs * diffs, axis=1)
-        best = np.argsort(distances)[:k]
-        return [(int(self.song_ids[i]), float(distances[i])) for i in best]
+    def search(self, query_vector, k=1):
+        """
+        Input: query_vector (numpy array of shape (1, dim))
+        Output: list of song_ids
+        """
+        if query_vector.ndim == 1:
+            query_vector = query_vector.reshape(1, -1)
+            
+        distances, indices = self.index.search(query_vector.astype('float32'), k)
+        
+        # Map indices back to filenames/IDs
+        retrieved_ids = [self.song_ids[i] for i in indices[0]]
+        return retrieved_ids
 
-    def save(self, path: str) -> None:
-        if self.embeddings is None or self.song_ids is None:
-            raise RuntimeError("Index not built")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        np.savez(path, embeddings=self.embeddings, song_ids=self.song_ids)
-
-    @classmethod
-    def load(cls, path: str) -> "AudioIndex":
-        payload = np.load(path, allow_pickle=True)
-        index = cls()
-        index.build(payload["embeddings"], payload["song_ids"])
-        return index
+# Test functionality
+if __name__ == "__main__":
+    retriever = MusicRetrieval()
+    # Fake query
+    fake_vec = np.random.rand(1, 768).astype('float32')
+    result = retriever.search(fake_vec)
+    print(f"Test Search Result: Nearest song is {result}")

@@ -1,64 +1,53 @@
-import json
-from dataclasses import dataclass
+import torch
+import torch.nn as nn
+import math
 
-import numpy as np
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model, max_len=5000):
+        super().__init__()
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe.unsqueeze(0))
 
+    def forward(self, x):
+        return x + self.pe[:, :x.size(1), :]
 
-def _softmax(x: np.ndarray) -> np.ndarray:
-    x = x - np.max(x)
-    exp = np.exp(x)
-    return exp / (np.sum(exp) + 1e-8)
+class ContextTransformer(nn.Module):
+    def __init__(self, input_dim=1024, hidden_dim=128, n_layers=2, n_heads=4):
+        """
+        Args:
+            input_dim: Dimension of your audio embeddings (1024 for MERT-330M)
+            hidden_dim: Size of the output Context Vector
+        """
+        super().__init__()
+        
+        # 1. Project Input (e.g. 1024) to Internal Dim (128)
+        self.embedding = nn.Linear(input_dim, hidden_dim)
+        self.pos_encoder = PositionalEncoding(hidden_dim)
+        
+        # 2. Transformer Encoder
+        encoder_layers = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=n_heads, batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layers, num_layers=n_layers)
+        
+        # 3. Output Head
+        self.head = nn.Linear(hidden_dim, hidden_dim)
 
-
-@dataclass
-class SequenceContextEncoder:
-    input_dim: int
-    embedding_dim: int
-    seed: int = 42
-
-    def __post_init__(self) -> None:
-        rng = np.random.default_rng(self.seed)
-        self.proj = rng.normal(scale=0.1, size=(self.input_dim, self.embedding_dim))
-        self.mean = np.zeros(self.input_dim, dtype=float)
-        self.std = np.ones(self.input_dim, dtype=float)
-
-    def fit(self, sequences: np.ndarray) -> None:
-        flat = sequences.reshape(-1, sequences.shape[-1])
-        self.mean = flat.mean(axis=0)
-        self.std = flat.std(axis=0) + 1e-6
-
-    def encode(self, sequence: np.ndarray) -> np.ndarray:
-        seq = np.asarray(sequence, dtype=float)
-        if seq.ndim == 1:
-            seq = seq.reshape(1, -1)
-        seq = (seq - self.mean) / self.std
-        if seq.shape[0] == 1:
-            pooled = seq[0]
-        else:
-            last = seq[-1]
-            scores = seq @ last
-            weights = _softmax(scores)
-            pooled = weights @ seq
-        return pooled @ self.proj
-
-    def save(self, path: str) -> None:
-        payload = {
-            "input_dim": int(self.input_dim),
-            "embedding_dim": int(self.embedding_dim),
-            "seed": int(self.seed),
-            "mean": self.mean.tolist(),
-            "std": self.std.tolist(),
-            "proj": self.proj.tolist(),
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-
-    @classmethod
-    def load(cls, path: str) -> "SequenceContextEncoder":
-        with open(path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        model = cls(payload["input_dim"], payload["embedding_dim"], payload.get("seed", 42))
-        model.mean = np.asarray(payload["mean"], dtype=float)
-        model.std = np.asarray(payload["std"], dtype=float)
-        model.proj = np.asarray(payload["proj"], dtype=float)
-        return model
+    def forward(self, x):
+        """
+        Input: [Batch, Seq_Len, Input_Dim]
+        Output: [Batch, Hidden_Dim]
+        """
+        # Embed & Position
+        x = self.embedding(x) # [B, S, H]
+        x = self.pos_encoder(x)
+        
+        # Pass through Transformer
+        output = self.transformer(x) # [B, S, H]
+        
+        # Take the last vector in the sequence
+        last_state = output[:, -1, :] # [B, H]
+        
+        return self.head(last_state)
