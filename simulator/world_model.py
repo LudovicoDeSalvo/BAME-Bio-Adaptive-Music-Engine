@@ -53,7 +53,7 @@ class WorldModel:
             next_state = next_state + noise
         return next_state[0] if next_state.shape[0] == 1 else next_state
 
-    def reward(self, next_state: np.ndarray, goal_state: np.ndarray | None = None):
+    def reward(self, next_state: np.ndarray, goal_state: np.ndarray | None = None) -> float | np.ndarray:
         ns = self._ensure_2d(next_state)
         if goal_state is None:
             gs = np.zeros_like(ns)
@@ -66,7 +66,7 @@ class WorldModel:
         r = -np.linalg.norm(ns - gs, axis=1)
         return r[0] if r.shape[0] == 1 else r
 
-    def step(self, state: np.ndarray, action: np.ndarray, goal_state: np.ndarray | None = None):
+    def step(self, state: np.ndarray, action: np.ndarray, goal_state: np.ndarray | None = None) -> tuple[np.ndarray, float | np.ndarray]:
         next_state = self.predict_next(state, action)
         reward = self.reward(next_state, goal_state)
         return next_state, reward
