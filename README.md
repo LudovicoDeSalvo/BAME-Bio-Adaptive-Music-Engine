@@ -1,102 +1,165 @@
-# Bio-Adaptive Closed-Loop Music Recommendation System
+# 🎵 Bio-Adaptive Music Engine
 
-## 1. Project Overview
-**Objective:** Develop a "homeostatic regulator" for human emotion that dynamically adjusts music playback based on real-time physiological feedback. This system creates a closed cybernetic loop, observing physiological deviations (e.g., stress) and actuating musical responses to minimize error, unlike open-loop commercial systems.
+**A Closed-Loop AI System for Physiological State Regulation via Music**
 
----
+##  Abstract
 
-## 2. System Architecture
-The system uses a Reinforcement Learning (RL) agent within a continuous state space, supported by a modular deep learning stack.
+The **Bio-Adaptive Music Engine** is a deep reinforcement learning framework designed to steer a user's physiological state (e.g., arousal, stress) toward a desired target using music. Unlike traditional recommender systems that optimize for "likes," this engine optimizes for **biological impact**.
 
-### Module A & D: Audio Representation ("Stimulus")
-* **Model:** MERT-v1-330M (Music Audio Pre-training).
-* **Function:** Extracts acoustic embeddings from raw audio waveforms.
-* **Output:** Continuous embedding vector ($v_{audio} \in \mathbb{R}^d$).
-
-### Module B: Physiological State ("Observer")
-* **Inputs:** Electrodermal Activity (EDA), Blood Volume Pulse (BVP), Skin Temperature (SKT).
-* **Model:** Dual-stream 1D-CNN + BiLSTM.
-* **Mechanism:**
-    * **Dual Stream:** Processes EDA and BVP separately to isolate specific noise profiles.
-    * **Fusion:** Merges streams to capture long-range temporal dependencies.
-* **Output:** Physiological State Vector.
-
-### Module C: User Profiling ("Filter")
-* **Inputs:** "Ten Item Personality Measure" (TIPI) scores.
-* **Model:** Deep & Cross Network (DCN).
-* **Function:** Models feature interactions (e.g., *Personality x Stimulus*) to address subjective reception.
-* **Output:** User Profile Vector.
-
-### Module E: Sequential Context ("Narrative")
-* **Model:** Transformer Encoder (Self-Attention).
-* **Function:** Processes interaction history to maintain narrative coherence and prevent abrupt mood shifts.
-* **Output:** Session Context Vector.
+The system learns a **World Model** of human physiology to simulate how different users react to music, then trains a **Soft Actor-Critic (SAC)** agent to navigate this internal model. Using a **Wolpertinger Policy**, the agent maps continuous control signals to discrete songs from a high-dimensional audio embedding space (MERT), enabling precise regulation of the user's autonomic nervous system.
 
 ---
 
-## 3. Reinforcement Learning Core
-**Engine:** Soft Actor-Critic (SAC) adapted for discrete information retrieval.
+## System Architecture
 
-* **State Space ($S_t$):** Concatenation of vectors from Modules B, C, D, and E.
-* **Policy (Actor):** Neural network mapping $S_t \rightarrow$ Continuous Target Action Vector ($v_{target}$) in MERT latent space.
-* **Retrieval ("Wolpertinger" Layer):**
-    * Actor outputs continuous vector, not discrete IDs.
-    * **k-NN Search:** Uses FAISS to find song $S_{song}$ in the database closest to $v_{target}$.
-* **Reward Function ($R_t$):** Minimization of physiological error (e.g., $R_t = -|Target\_Valence - Current\_Valence|$).
-* **Critic:** Updates Q-values based on $(S_t, A_t, R_t, S_{t+1})$ to maximize reward and entropy.
+### 1. Sensing & Perception (The Encoders)
 
----
+* **Audio:** Pre-trained **MERT (Music Understanding Model)** extracts 1024-dim embeddings from raw waveforms.
+* **Physiology:** A **Dual-Stream CNN-LSTM Encoder** processes raw biosignals (EDA, Temp, BVP, HR, IBI) into a compact 64-dim latent state.
+* **User Profile:** A **Deep Cross Network (DCN)** encodes static personality traits (Big Five) into a 32-dim vector.
 
-## 4. Training Strategy: The User Simulator
-Due to the static nature of the HKU956 dataset, Online RL is impossible initially. We utilize **Offline Reinforcement Learning**.
+* **Context Transformer:** A sequence model that aggregates the user's recent listening history into a dynamic context vector, making the system **Non-Markovian**.
 
-### Step 1: Supervised Pre-training (World Model)
-* **Data:** HKU956 tuples $(User, Song, Response)$.
-* **Task:** Train a "User Simulator" to predict Next Physio State ($S_{physio, t+1}$) and Reward ($R_{t+1}$) given Current State ($S_t$) and Action ($A_t$).
-* **Role:** Acts as the surrogate Environment for the RL agent.
+### 2. Simulation (The World Model)
 
-### Step 2: Offline RL Training
-* Freeze the Simulator.
-* Train the SAC agent inside this simulated environment to learn the optimal policy before real-world deployment.
+* A Deep Neural Network that acts as a **Virtual Environment**.
+* **Input:** $[Physio_t, User, Context_t, Song_t]$
+* **Output:** Predicted $Physio_{t+1}$
+
+### 3. Control (The Agent)
+
+* **Algorithm:** Soft Actor-Critic (SAC).
+* **Policy:** **Wolpertinger Architecture**. The Actor outputs a continuous "ideal song" vector, which is mapped to the nearest  real songs in the database (FAISS), which are then re-ranked by the Critic to select the safest physiological intervention.
 
 ---
 
-## 5. Data Specifications
-* **Primary Dataset:** **HKU956**.
-    * **Subjects:** 30 participants.
-    * **Content:** 956 songs.
-    * **Signals:** EDA, BVP, SKT, HR (aligned with audio).
-    * **Metadata:** TIPI personality profiles.
+## Installation
+
+### Setup
+
+1. **Clone the Repository:**
+```bash
+git clone https://github.com/LudovicoDeSalvo/Bio-Adaptive-Music-Engine.git
+cd Bio-Adaptive-Music-Engine
+
+```
+
+
+2. **Install Dependencies:**
+```bash
+pip install -r renquirements.txt
+
+```
 
 ---
 
-## 6. Action Plan: Parallel Development Strategy
+## Usage
 
-To maximize efficiency, development is split into two tracks: **Track A (Control & Audio)** and **Track B (State & Simulation)**.
+The project is controlled via a central CLI dashboard.
 
-### Phase 0: Protocol Definition (Joint Task)
-* **Objective:** Define the "Contract" between modules.
-* **Deliverable:** `config.py` defining:
-    * Dimension size of $v_{audio}$ (from MERT).
-    * Dimension size of $v_{physio}$ (from CNN).
-    * Dimension size of $v_{profile}$ (from DCN).
-    * Structure of the concatenated State Vector $S_t$.
+Run the controller:
 
-### Phase 1: Component Construction
+```bash
+python main.py
 
-| **Developer A (Control & Audio)** | **Developer B (State & Simulation)** |
-| :--- | :--- |
-| **1. Audio Pipeline (Module A/D):** <br> - Implement MERT-v1 inference. <br> - Batch process HKU956 audio to generate `audio_embeddings.npy`. | **1. Physio Pipeline (Module B):** <br> - Preprocessing (filtering/normalization) of EDA/BVP signals. <br> - Implement and train Dual-stream 1D-CNN + BiLSTM on HKU956 to predict valence/arousal. |
-| **2. Vector Database:** <br> - Set up FAISS index with `audio_embeddings`. <br> - Implement k-NN lookup function. | **2. Profiler (Module C):** <br> - Implement Deep & Cross Network (DCN) for TIPI data. |
-| **3. SAC Skeleton:** <br> - Implement SAC Actor/Critic networks (input size = $S_t$). <br> - Implement "Wolpertinger" logic (continuous output $\rightarrow$ k-NN). | **3. Data Loader:** <br> - Create `HKUDataset` class yielding tuples: $(S_{physio}, S_{user}, S_{audio}, S_{next\_physio})$. |
+```
 
-### Phase 2: Simulation & Integration
+### Data Preparation
 
-| **Developer A** | **Developer B** |
-| :--- | :--- |
-| **4. RL Loop Logic:** <br> - Build the training loop connecting Actor $\rightarrow$ Simulated Environment $\rightarrow$ Critic. | **5. User Simulator (World Model):** <br> - Train a Transformer/MLP to predict $S_{physio, t+1}$ given $(S_t, A_t)$. <br> - **Critical:** Ensure Simulator loss converges; otherwise RL will fail. |
+* **[0] Initialize:** Unzips data, creates folder structures and download songs.
+* **[1] Align & Slice:** Syncs physiological signals with audio duration and slices them into discrete events.
+* **[2] Extract Embeddings:** Runs MERT on thousands of audio clips (GPU intensive).
 
-### Phase 3: Joint Training
-1.  **Merge:** Combine SAC Agent (Dev A) with User Simulator (Dev B).
-2.  **Offline Training:** Run SAC training loop against the frozen User Simulator for 100k+ steps.
-3.  **Evaluation:** Test agent against hold-out set of User Simulator scenarios.
+### Component Training
+
+* **[4] Train Physio Encoder:** Learns to compress biosignals.
+* **[5] Train User Profiler:** Learns to encode personality.
+* **[6] Train Context Model:** Learns listening history patterns.
+
+### Simulation & Agent
+
+* **[7] Train World Model:** Trains the simulator physics engine (Dependent on [4], [5], [6]).
+* **[8] Train SAC Agent:** Trains the "Brain" to control the simulator.
+
+### Evaluation
+
+* **[9] Run Inference:** Performs a "Blind Test" on a held-out user (`hku1903` by default) to verify generalization and control efficacy.
+
+---
+
+## 📊 Results
+
+The system was evaluated using a **Leave-One-Subject-Out** protocol.
+
+### 1. Generalization (World Model)
+
+The simulator successfully predicts the physiological reaction of users it has never seen before.
+
+* **Metric:** Mean Squared Error (MSE) on standardized physiological features.
+* **Result:** **0.28** 
+* **Conclusion:** The model has learned a universal mapping between music and human biology.
+
+### 2. Control Efficacy (Agent)
+
+The Agent successfully navigates the physiological space, demonstrating robust control authority over biological resistance.
+
+* **Average Final Distance:** **3.12** units (High alignment with target).
+* **Max Improvement:** **+8.13** units (Drastic state change).
+* **Phenomenon Observed:** **Overcoming Homeostasis**. Unlike previous iterations where the user's biology naturally "drifted" back to baseline, the agent now actively reverses this drift. It proves capable of overriding biological inertia to driving the user significantly closer to the target state.
+
+---
+
+## 📂 Project Structure
+
+```
+├── audio/
+│   ├── faiss_index.py      # Nearest Neighbor search (FAISS)
+│   └── mert_embedder.py    # MERT-v1-330M Audio Feature Extractor
+│
+├── configs/
+│   └── config.yaml         # Global hyperparameters and paths
+│
+├── context/
+│   ├── sequence_model.py   # Transformer for listening history
+│   └── train_context.py    # Training script for Context Module
+│
+├── data/
+│   └── windows.py          # Sliding window generation for physio
+│
+├── physio/
+│   ├── encoder.py          # Dual-Stream CNN-LSTM Architecture
+│   └── train_encoder.py    # Training script for Physio Module
+│
+├── rl/
+│   ├── sac_agent.py        # Soft Actor-Critic (Actor & Critic Networks)
+│   ├── train_agent.py      # Main RL training loop
+│   └── wolpertinger.py     # KNN Action Selection Policy
+│
+├── scripts/
+│   ├── setup/
+│   │   └── download_songs.py # Helper to fetch audio files
+│   ├── align_and_slice.py  # Data synchronization engine
+│   └── inference.py        # Evaluation & Report generation
+│
+├── simulator/
+│   ├── gym_env.py          # OpenAI Gym Environment Wrapper
+│   ├── train_simulator.py  # Training script for World Model
+│   └── world_model.py      # The Neural Physics Engine
+│
+├── user/
+│   ├── dcn_profile.py      # Deep Cross Network for User Traits
+│   └── train_profile.py    # Training script for User Profiler
+│
+├── utils/
+│   └── common.py           # Path resolution & Helper functions
+│  
+└── main.py                 # Central CLI Controller
+
+```
+
+---
+
+## 📝 Citation & Credits
+
+* **Dataset:** HKU956 (University of Hong Kong): Hu, X.; Li, F.; Liu, R. Detecting Music-Induced Emotion Based on Acoustic Analysis and Physiological Sensing: A Multimodal Approach. Applied Science. 2022, 12, 9354. https://doi.org/10.3390/app12189354
+* **Audio Model:** MERT-v1-330M (HuggingFace).

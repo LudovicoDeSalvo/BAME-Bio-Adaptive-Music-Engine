@@ -3,7 +3,7 @@ scipy
 scikit-learn
 torchaudio 
 transformers
-faiss-cpu
+faiss-gpu
 tqdm
 pandas
 nnAudio
@@ -12,3 +12,4 @@ numpy<2.0
 gymnasium
 pyyaml
 zipfile
+matplotlib
