@@ -1,49 +1,73 @@
-import json
-from dataclasses import dataclass
+import torch
+import torch.nn as nn
 
-import numpy as np
+class DualStreamEncoder(nn.Module):
+    def __init__(self, hidden_dim=64, embedding_dim=64):
+        super(DualStreamEncoder, self).__init__()
+        
+        # --- Stream 1: EDA + TEMP (12 features) ---
 
+        self.dermal_cnn = nn.Sequential(
+            nn.Conv1d(in_channels=12, out_channels=32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm1d(32),
+            nn.Conv1d(32, 32, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+        self.dermal_lstm = nn.LSTM(input_size=32, hidden_size=hidden_dim, 
+                                   num_layers=1, batch_first=True, bidirectional=True)
+        
+        # --- Stream 2: BVP + HR + IBI (18 features) ---
 
-@dataclass
-class PhysioEncoder:
-    input_dim: int
-    embedding_dim: int
-    seed: int = 42
+        self.cardio_cnn = nn.Sequential(
+            nn.Conv1d(in_channels=18, out_channels=32, kernel_size=3, padding=1),
+            nn.ReLU(),
+            nn.BatchNorm1d(32),
+            nn.Conv1d(32, 32, kernel_size=3, padding=1),
+            nn.ReLU()
+        )
+        self.cardio_lstm = nn.LSTM(input_size=32, hidden_size=hidden_dim, 
+                                   num_layers=1, batch_first=True, bidirectional=True)
+        
+        # --- Fusion ---
+        fusion_dim = (hidden_dim * 2) + (hidden_dim * 2)
+        
+        self.projector = nn.Sequential(
+            nn.Linear(fusion_dim, 128),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(128, embedding_dim) # 64 output
+        )
 
-    def __post_init__(self) -> None:
-        rng = np.random.default_rng(self.seed)
-        self.weights = rng.normal(scale=0.1, size=(self.input_dim, self.embedding_dim))
-        self.mean = np.zeros(self.input_dim, dtype=float)
-        self.std = np.ones(self.input_dim, dtype=float)
+    def forward(self, dermal, cardio):
+        """
+        1: [batch, seq_len, 12]
+        2: [batch, seq_len, 18]
+        """
 
-    def fit(self, features: np.ndarray) -> None:
-        features = np.asarray(features, dtype=float)
-        self.mean = features.mean(axis=0)
-        self.std = features.std(axis=0) + 1e-6
+        d_in = dermal.transpose(1, 2)
+        c_in = cardio.transpose(1, 2)
+        
+        d_feat = self.dermal_cnn(d_in) 
+        c_feat = self.cardio_cnn(c_in)
+        
+        d_lstm_in = d_feat.transpose(1, 2)
+        c_lstm_in = c_feat.transpose(1, 2)
+        
+        _, (h_n_d, _) = self.dermal_lstm(d_lstm_in)
+        _, (h_n_c, _) = self.cardio_lstm(c_lstm_in)
+        
+        d_vec = torch.cat([h_n_d[-2], h_n_d[-1]], dim=1)
+        c_vec = torch.cat([h_n_c[-2], h_n_c[-1]], dim=1)
+        
+        combined = torch.cat([d_vec, c_vec], dim=1)
+        return self.projector(combined)
 
-    def encode(self, features: np.ndarray) -> np.ndarray:
-        features = np.asarray(features, dtype=float)
-        normed = (features - self.mean) / self.std
-        return normed @ self.weights
-
-    def save(self, path: str) -> None:
-        payload = {
-            "input_dim": int(self.input_dim),
-            "embedding_dim": int(self.embedding_dim),
-            "seed": int(self.seed),
-            "mean": self.mean.tolist(),
-            "std": self.std.tolist(),
-            "weights": self.weights.tolist(),
-        }
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(payload, f, indent=2)
-
+    def save(self, path):
+        torch.save(self.state_dict(), path)
+        
     @classmethod
-    def load(cls, path: str) -> "PhysioEncoder":
-        with open(path, "r", encoding="utf-8") as f:
-            payload = json.load(f)
-        model = cls(payload["input_dim"], payload["embedding_dim"], payload.get("seed", 42))
-        model.mean = np.asarray(payload["mean"], dtype=float)
-        model.std = np.asarray(payload["std"], dtype=float)
-        model.weights = np.asarray(payload["weights"], dtype=float)
+    def load(cls, path, device='cpu'):
+        model = cls()
+        model.load_state_dict(torch.load(path, map_location=device))
         return model

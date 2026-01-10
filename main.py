@@ -1,116 +1,210 @@
-# 🚀 CLI Entry point (The Controller)
 import sys
 import os
 import time
 import importlib
 import argparse
+import glob
+import numpy as np
+import zipfile
 
-# --- Configuration Constants ---
+# --- Configuration ---
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATA_RAW_DIR = os.path.join(ROOT_DIR, "data", "raw", "HKU956")
 
-# --- Utility Functions ---
+# --- Utility functions ---
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
 def print_header():
     print("="*65)
-    print("      BIO-ADAPTIVE MUSIC ENGINE | CLI CONTROLLER")
+    print("      BIO-ADAPTIVE MUSIC ENGINE | PIPELINE CONTROLLER")
     print(f"      Root: {ROOT_DIR}")
     print("="*65)
 
-def check_structure():
-    """Verifies that the HKU956 dataset is correctly placed."""
-    required_paths = [
-        os.path.join(DATA_RAW_DIR, "1. physiological_signals"),
-        os.path.join(DATA_RAW_DIR, "2. audio_signals"),
-        os.path.join(DATA_RAW_DIR, "3. AV_ratings.csv"),
-        os.path.join(DATA_RAW_DIR, "4. participant_personality.csv")
-    ]
-    
-    missing = [p for p in required_paths if not os.path.exists(p)]
-    
-    if missing:
-        print("\n⚠️  STRUCTURE WARNING: HKU956 Dataset not found in expected path.")
-        print(f"   Expected location: {DATA_RAW_DIR}")
-        print("   Missing files/folders:")
-        for m in missing:
-            print(f"    - {os.path.basename(m)}")
-        print("\n   ACTION REQUIRED: Move your 'HKU956' folder into 'data/raw/'.")
-        input("   Press Enter to continue anyway (or Ctrl+C to exit and fix)...")
-
 def safe_run(module_path, function_name, **kwargs):
     """Dynamically imports and runs a function with error handling."""
+
+    # load
     try:
         mod = importlib.import_module(module_path)
         func = getattr(mod, function_name)
-        
-        print(f"\n>> 🚀 Launching {module_path}.{function_name}()...")
+
+    except (ModuleNotFoundError, AttributeError) as e:
+        print(f"\n>> !!!  ERROR: Could not load '{function_name}' from '{module_path}'.")
+        print(f"   Reason: {e}")
+        return
+
+    # run
+    try:
+        print(f"\n >> Launching {module_path}.{function_name}()...")
         time.sleep(1)
         func(**kwargs)
-        print(f"\n>> ✅ Task {function_name} completed.")
-        
-    except ModuleNotFoundError as e:
-        print(f"\n>> ❌ ERROR: Module '{e.name}' not found.")
-        print(f"   Has the file '{module_path.replace('.', '/')}.py' been created?")
-    except AttributeError:
-        print(f"\n>> ❌ ERROR: Function '{function_name}' not found in '{module_path}'.")
+        print(f"\n>> Task {function_name} completed!")
+
     except Exception as e:
-        print(f"\n>> ❌ RUNTIME ERROR: {e}")
+        print(f"\n>> !!! RUNTIME ERROR in {function_name}: {e}")
         import traceback
-        traceback.print_exc()
+        traceback.print_exc() 
     
     input("\n[Press Enter to return to menu]")
+
+
+def check_system_health():
+    print("\n--- SYSTEM HEALTH CHECK ---")
+    
+    checks = [
+        ("Raw Data", "data/raw/HKU956/1. physiological_signals", "Check if HKU956 is in place"),
+        ("Audio Clips", "data/processed/audio_clips", "Run option [1] to generate clips"),
+        ("Physio Pool", "data/processed/physio_cache.npz", "Run option [1] to generate physio"),
+        ("Song Embeddings", "data/processed/song_embeddings.npy", "Run option [2] to encode audio"),
+        ("Physio Embeddings", "data/processed/physio_embeddings.npz", "Run option [4] to train encoder"),
+        ("User Embeddings", "data/processed/user_embeddings.npz", "Run option [5] to train profiler"),
+        ("Context Model", "context/checkpoints/context_model.pth", "Run option [6] to train context"),
+        ("World Model", "simulator/checkpoints/world_model.pth", "Run option [7] to train simulator"),
+        ("Agent Checkpoint", "rl/checkpoints/sac_final_actor.pth", "Run option [8] to train agent")
+    ]
+    
+    all_pass = True
+
+    for name, path, tip in checks:
+
+        full_path = os.path.join(ROOT_DIR, path)
+        exists = os.path.exists(full_path)
+
+        if not exists and "audio_clips" in path:
+             exists = os.path.isdir(full_path) and len(os.listdir(full_path)) > 0
+             
+        status = " PASS" if exists else " MISSING"
+
+        print(f" {status} | {name:<18} | {path}")
+        if not exists:
+            print(f"    -> Tip: {tip}")
+            all_pass = False
+            
+    if all_pass:
+        print("\n>> SYSTEM READY! All components are built.")
+    else:
+        print("\n>> !!! System incomplete. Run the missing steps above.")
+    
+    input("\n[Press Enter to continue]")
+
 
 # --- Task Wrappers ---
 
 def setup_project():
-    """Creates the empty folder structure."""
+    """Creates folder structure, unzips dataset, and optionally downloads songs"""
+
+    # folders
     folders = [
-        "data/raw", "data/processed",
+        "data/raw", "data/processed/audio_clips", 
         "audio", "physio", "user", "context", "simulator", "rl", "scripts", "configs"
     ]
+
     for f in folders:
         os.makedirs(os.path.join(ROOT_DIR, f), exist_ok=True)
-        # Create __init__.py so they are treated as modules
         init_file = os.path.join(ROOT_DIR, f, "__init__.py")
-        if not os.path.exists(init_file):
+        if not os.path.exists(init_file) and "data" not in f:
             open(init_file, 'a').close()
-            
-    print(">> ✅ Project structure created.")
-    print(">> NOW: Move your existing 'HKU956' folder into 'data/raw/'.")
-    time.sleep(2)
 
-def process_data():
-    """Person B: Parse HKU956."""
-    safe_run("data.hku956_loader", "process_and_cache_data")
+    print(">> Folders created")
+    
+    # unzip dataset
+    zip_path = os.path.join(ROOT_DIR, "HKU956.zip")
+    extract_path = os.path.join(ROOT_DIR, "data", "raw")
+    target_folder = os.path.join(extract_path, "HKU956")
+
+    if os.path.exists(zip_path):
+        if not os.path.exists(target_folder):
+
+            print(f">> Found HKU956.zip. Extracting to {extract_path}...")
+            try:
+                with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+                    zip_ref.extractall(extract_path)
+                print(">> Dataset extracted successfully")
+                
+            except zipfile.BadZipFile:
+                print(">> !!! Error: HKU956.zip is corrupted")
+
+            except Exception as e:
+                print(f">> !!! Error extracting dataset: {e}")
+        else:
+            print(">> Dataset already extracted")
+    else:
+        print(f">> !!! HKU956.zip not found in root")
+
+    time.sleep(1)
+
+    # download songs
+    choice = input("Run the song downloader? (y/n): ").strip().lower()
+    
+    if choice == 'y':
+        safe_run("scripts.download_songs", "execution")
+    else:
+        print(">> Skipping song download.")
+
+    time.sleep(1)
+
+def align_and_slice():
+
+    confirm = input("This will overwrite existing clips in 'data/processed. Continue? (y/n): ")
+    if confirm.lower() == 'y':
+
+        clips_dir = "data/processed/audio_clips"
+
+        if os.path.exists(clips_dir):
+            files = glob.glob(os.path.join(clips_dir, "*.wav"))
+            for f in files: os.remove(f)
+            
+        safe_run("scripts.align_and_slice", "align_and_process")
+
+def process_audio():
+    if not os.path.exists("data/processed/audio_clips"):
+        print("!!! Warning: 'audio_clips' folder missing")
+        time.sleep(2)
+    safe_run("audio.mert_embedder", "extract_all_embeddings")
+
+def verify_data():
+
+    path = "data/processed/physio_cache.npz"
+
+    if not os.path.exists(path):
+        print(f"!!! File not found: {path}")
+
+    else:
+        try:
+            data = np.load(path, allow_pickle=True)
+            print(f"\n--- DATASET STATISTICS ---")
+            print(f"Total samples (clips): {len(data['features'])}")
+            print(f"Physio feature dim:    {data['features'].shape[1]}")
+            print(f"Window tensor shape:   {data['window_features'].shape}")
+            print(f"Unique songs:          {len(np.unique(data['song_ids']))}")
+            print(f"Unique participants:   {len(np.unique(data['participant_ids']))}")
+            print("OK! Data aligned and ready for training.")
+        except Exception as e:
+            print(f"!!! Error reading cache: {e}")
+    
+    input("\n[Press Enter]")
 
 def train_physio():
-    """Person B: Train CNN Encoder."""
-    epochs = input("Enter epochs (default 20): ") or 20
+    epochs = input("Enter epochs (default 150): ") or 150
     safe_run("physio.train_encoder", "train_physio_model", epochs=int(epochs))
 
 def train_user():
-    """Person B: Train DCN Profile."""
     safe_run("user.train_profile", "train_user_model")
 
-def train_world():
-    """Person B: Train World Simulator."""
-    safe_run("simulator.train_simulator", "train_world_model")
-
-def process_audio():
-    """Person A: Extract MERT Embeddings."""
-    safe_run("audio.mert_embedder", "extract_all_embeddings")
-
 def train_context():
-    """Person A: Train Transformer Context."""
     safe_run("context.train_context", "train_context_model")
 
+def train_world():
+    safe_run("simulator.train_simulator", "train_world_model")
+
 def train_agent():
-    """Person A: Train SAC Agent."""
-    steps = input("Enter training steps (default 10000): ") or 10000
+    steps = input("Enter training steps (default 1000): ") or 1000
     safe_run("rl.train_agent", "train_sac_agent", steps=int(steps))
+
+def run_inference():
+    safe_run("scripts.inference", "run_inference_protocol")
 
 # --- Interactive Menu ---
 
@@ -119,36 +213,43 @@ def interactive_menu():
         clear_screen()
         print_header()
         
-        print("\n--- 🛠  SETUP ---")
-        print(" [0] Initialize Folder Structure (Run this first!)")
-        
-        print("\n--- 👤 PERSON B: WORLD BUILDER (Environment) ---")
-        print(" [1] Process Raw HKU956 Data (Loader)")
-        print(" [2] Train Module B (Physio Encoder)")
-        print(" [3] Train Module C (User Profiles)")
-        print(" [4] Train The User Simulator (World Model)")
+        print("\n--- DATA PREPARATION ---")
+        print(" [0] Preparation: Create Folders, Unzip Dataset, Download Songs")
+        print(" [1] Align and Slice Data")
+        print(" [2] Extract Audio Embeddings (MERT)")
+        print(" [3] Verify Aligned Dataset")
 
-        print("\n--- 👤 PERSON A: AGENT ARCHITECT (Policy) ---")
-        print(" [5] Pre-compute MERT Audio Embeddings (Module A)")
-        print(" [6] Train Context Transformer (Module E)")
-        print(" [7] Train SAC Agent (Offline RL)")
+        print("\n--- COMPONENT TRAINING ---")
+        print(" [4] Train Physiological Encoder")
+        print(" [5] Train User Profiler")
+        print(" [6] Train Context Transformer")
+
+        print("\n--- SIMULATION and AGENT ---")
+        print(" [7] Train User Simulator")
+        print(" [8] Train SAC Agent")
+
+        print("\n--- EVALUATION ---")
+        print(" [9] Run Inference (Holdout User Evaluation)")
         
-        print("\n--- 🏁 SYSTEM ---")
+        print("\n--- UTILITIES ---")
+        print(" [H] System Health Check")
         print(" [Q] Quit")
         
         choice = input("\nSelect an option >> ").strip().lower()
 
         if choice == '0': setup_project()
-        elif choice == '1': process_data()
-        elif choice == '2': train_physio()
-        elif choice == '3': train_user()
-        elif choice == '4': train_world()
-        elif choice == '5': process_audio()
-        elif choice == '6': train_context()
-        elif choice == '7': train_agent()
+        elif choice == '1': align_and_slice()
+        elif choice == '2': process_audio()
+        elif choice == '3': verify_data()
+        elif choice == '4': train_physio()
+        elif choice == '5': train_user()
+        elif choice == '6': train_context() 
+        elif choice == '7': train_world()   
+        elif choice == '8': train_agent()
+        elif choice == '9': run_inference()
+        elif choice == 'h': check_system_health()
         elif choice == 'q': sys.exit(0)
         else: print("Invalid selection.")
 
 if __name__ == "__main__":
-    check_structure()
     interactive_menu()

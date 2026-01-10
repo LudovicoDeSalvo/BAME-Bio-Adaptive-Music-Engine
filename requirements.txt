@@ -1,1 +1,14 @@
-torch torchaudio transformers faiss-cpu tqdm pandas nnAudio torchcodec
+torch
+scipy
+scikit-learn
+torchaudio 
+transformers
+faiss-cpu
+tqdm
+pandas
+nnAudio
+torchcodec
+numpy<2.0
+gymnasium
+pyyaml
+zipfile

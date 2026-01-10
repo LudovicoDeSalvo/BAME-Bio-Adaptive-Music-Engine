@@ -1,60 +1,124 @@
-import os
-
+import torch
 import numpy as np
+import os
+import random
+from tqdm import tqdm
 
-from audio.faiss_index import AudioIndex
+from simulator.gym_env import MusicEnv
 from rl.sac_agent import SACAgent
 from rl.wolpertinger import WolpertingerPolicy
-from simulator.gym_env import MusicEnv
-from utils.common import ensure_dir, load_config, resolve_path, set_seed
+from utils.common import ensure_dir
 
+# --- Configuration ---
+BATCH_SIZE = 64
+REPLAY_SIZE = 100000
+START_STEPS = 1000  
+TRAIN_STEPS = 2000
+CHECKPOINT_DIR = "rl/checkpoints"
 
-def _load_index(paths: dict) -> AudioIndex | None:
-    embeddings_path = resolve_path(paths.get("embeddings_path", "data/processed/audio_embeddings.npz"))
-    index_path = resolve_path(paths.get("index_path", "data/processed/audio_index.npz"))
-    if not os.path.exists(embeddings_path):
-        return None
-    if os.path.exists(index_path):
-        return AudioIndex.load(index_path)
-    payload = np.load(embeddings_path, allow_pickle=True)
-    index = AudioIndex()
-    index.build(payload["embeddings"], payload["song_ids"])
-    ensure_dir(os.path.dirname(index_path))
-    index.save(index_path)
-    return index
+class ReplayBuffer:
+    def __init__(self, state_dim, action_dim, capacity=REPLAY_SIZE):
 
+        self.ptr = 0
+        self.size = 0
+        self.capacity = capacity
+        self.state = np.zeros((capacity, state_dim))
+        self.action = np.zeros((capacity, action_dim))
+        self.reward = np.zeros((capacity, 1))
+        self.next_state = np.zeros((capacity, state_dim))
+        self.done = np.zeros((capacity, 1))
 
-def train_sac_agent(steps: int = 10000, config_path: str = "configs/config.yaml") -> str:
-    config = load_config(config_path)
-    paths = config.get("paths", {})
-    model_cfg = config.get("model", {})
-    training = config.get("training", {})
+    def add(self, state, action, reward, next_state, done):
 
-    set_seed(int(training.get("seed", 42)))
+        self.state[self.ptr] = state
+        self.action[self.ptr] = action
+        self.reward[self.ptr] = reward
+        self.next_state[self.ptr] = next_state
+        self.done[self.ptr] = done
+        self.ptr = (self.ptr + 1) % self.capacity
+        self.size = min(self.size + 1, self.capacity)
 
-    env = MusicEnv(config_path)
-    agent = SACAgent(env.state_dim, int(model_cfg.get("action_dim", 128)))
+    def sample(self, batch_size):
 
-    index = _load_index(paths)
-    wolpertinger = WolpertingerPolicy(index, k=5) if index else None
-    embeddings_lookup = None
-    if index:
-        embeddings_lookup = {int(sid): index.embeddings[idx] for idx, sid in enumerate(index.song_ids)}
+        ind = np.random.randint(0, self.size, size=batch_size)
 
-    state = env.reset()
-    for _ in range(int(steps)):
-        action = agent.act(state)
-        if wolpertinger and embeddings_lookup:
-            song_id, _ = wolpertinger.select(action)
-            action_vec = embeddings_lookup.get(song_id, action)
+        return (
+            self.state[ind],
+            self.action[ind],
+            self.reward[ind],
+            self.next_state[ind],
+            self.done[ind]
+        )
+
+def train_sac_agent(steps=TRAIN_STEPS):
+
+    ensure_dir(CHECKPOINT_DIR)
+    
+    # env and agent initialization
+    env = MusicEnv()
+    state_dim = env.observation_space.shape[0]
+    action_dim = env.action_space.shape[0]
+    
+    print(f">> [Agent] state dim: {state_dim}, action Dim: {action_dim}")
+    
+    agent = SACAgent(state_dim, action_dim)
+    memory = ReplayBuffer(state_dim, action_dim)
+    
+    # wolpertinger
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    try:
+        wolpertinger = WolpertingerPolicy(k_neighbors=10, device=device)
+        print(">> [Agent] wolpertinger active (k=10).")
+    except Exception as e:
+        print(f" !!! FAISS error: {e}")
+        return
+
+    # train
+    state, _ = env.reset()
+    episode_reward = 0
+    
+    print(f">> [Agent] Training for {steps} steps...")
+    
+    for step in tqdm(range(steps)):
+
+        # action selection
+        if step < START_STEPS:
+            proto_action = env.action_space.sample()
         else:
-            action_vec = action
+            proto_action = agent.select_action(state, evaluate=False)
 
-        next_state, reward, done, _ = env.step(action_vec)
-        agent.update({"state": state, "action": action_vec, "reward": reward, "next_state": next_state})
-        state = env.reset() if done else next_state
+        # wolpertinger (continuous -> discrete real song)
+        state_tensor = torch.FloatTensor(state).unsqueeze(0).to(device)
+        real_action, song_id = wolpertinger.select_action(proto_action, agent.critic, state_tensor)
+        
+        # env step
+        next_state, reward, terminated, truncated, _ = env.step(real_action)
+        done = terminated or truncated
+        
+        mask = 0 if done else 1
+        
+        # action storing
+        memory.add(state, proto_action, reward, next_state, mask)
+        
+        state = next_state
+        episode_reward += reward
+        
+        # weights
+        if step >= START_STEPS:
+            agent.update_parameters(memory, BATCH_SIZE)
 
-    model_path = resolve_path(paths.get("sac_model_path", "models/sac_agent.json"))
-    ensure_dir(os.path.dirname(model_path))
-    agent.save(model_path)
-    return model_path
+        if done:
+            tqdm.write(f"Episode finished. Reward: {episode_reward:.2f} | Last song: {song_id}")
+            state, _ = env.reset()
+            episode_reward = 0
+
+            if step % 1000 == 0:
+                agent.save(os.path.join(CHECKPOINT_DIR, "sac_checkpoint"))
+
+    # save
+    agent.save(os.path.join(CHECKPOINT_DIR, "sac_final"))
+    print(">> [Agent] Training complete!")
+
+if __name__ == "__main__":
+    train_sac_agent()

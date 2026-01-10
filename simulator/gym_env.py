@@ -1,147 +1,136 @@
 import os
-from dataclasses import dataclass
-from typing import Any, Dict, Optional, Tuple
-
 import numpy as np
-
-try:
-    import gymnasium as gym
-    from gymnasium import spaces
-except Exception as exc:
-    raise RuntimeError("Install gymnasium to use MusicEnv as an environment") from exc
+import torch
+import gymnasium as gym
+from gymnasium import spaces
+from collections import deque
 
 from simulator.world_model import WorldModel
+from context.sequence_model import ContextTransformer
 from utils.common import load_config, resolve_path
-
-
-@dataclass
-class EnvCfg:
-    seed: int = 42
-    max_steps: int = 50
-    action_clip: float = 1.0
-    goal_state: Optional[np.ndarray] = None
-
 
 class MusicEnv(gym.Env):
     metadata = {"render_modes": []}
 
-    def __init__(self, config_path: str = "configs/config.yaml", env_cfg: EnvCfg | None = None) -> None:
+    def __init__(self, config_path="configs/config.yaml"):
         super().__init__()
-        config = load_config(config_path)
-        self.paths = config.get("paths", {})
-        self.model_cfg = config.get("model", {})
-        training = config.get("training", {})
 
-        self.cfg = env_cfg or EnvCfg(seed=int(training.get("seed", 42)))
-
-        self.physio_dim = int(self.model_cfg.get("physio_embedding_dim", 64))
-        self.profile_dim = int(self.model_cfg.get("profile_embedding_dim", 16))
-        self.context_dim = int(self.model_cfg.get("context_embedding_dim", 32))
-        self.action_dim = int(self.model_cfg.get("action_dim", 128))
-        self.state_dim = self.physio_dim + self.profile_dim + self.context_dim
-
-        self._rng = np.random.default_rng(self.cfg.seed)
-
-        processed_dir = self.paths.get("processed_dir", "data/processed")
-        physio_emb_path = resolve_path(
-            self.paths.get("physio_embeddings", os.path.join(processed_dir, "physio_embeddings.npz"))
-        )
-        user_emb_path = resolve_path(
-            self.paths.get("user_embeddings", os.path.join(processed_dir, "user_embeddings.npz"))
-        )
-
-        self.physio_pool = self._load_pool(physio_emb_path, self.physio_dim)
-        self.profile_pool = self._load_pool(user_emb_path, self.profile_dim)
-
-        world_path = resolve_path(self.paths.get("world_model_path", "models/world_model.json"))
-        if os.path.exists(world_path):
-            self.world_model = WorldModel.load(world_path)
-        else:
-            self.world_model = WorldModel(self.state_dim, self.action_dim)
-
-        if self.world_model.state_dim != self.state_dim or self.world_model.action_dim != self.action_dim:
-            raise ValueError(
-                f"WorldModel dims mismatch: wm(state_dim={self.world_model.state_dim}, action_dim={self.world_model.action_dim}) "
-                f"vs env(state_dim={self.state_dim}, action_dim={self.action_dim}). "
-                "Retrain or align configs."
-            )
-
+        self.config = load_config(config_path)
+        self.device = "cuda" if torch.cuda.is_available() else "cpu"
+        
+        # dims
+        model_cfg = self.config.get("model", {})
+        self.physio_dim = int(model_cfg.get("physio_embedding_dim", 64))
+        self.user_dim = int(model_cfg.get("profile_embedding_dim", 32))
+        self.context_dim = int(model_cfg.get("context_embedding_dim", 128))
+        self.action_dim = int(model_cfg.get("action_dim", 1024))
+        
+        self.state_dim = self.physio_dim + self.user_dim + self.context_dim
+        
         self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(self.state_dim,), dtype=np.float32)
-        self.action_space = spaces.Box(
-            low=-self.cfg.action_clip, high=self.cfg.action_clip, shape=(self.action_dim,), dtype=np.float32
-        )
-
-        self._t = 0
-        self.state = np.zeros(self.state_dim, dtype=float)
-
-        if self.cfg.goal_state is None:
-            self.goal_state = None
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(self.action_dim,), dtype=np.float32)
+        
+        # load world model
+        wm_path = resolve_path(self.config['paths']['world_model_path'])
+        if os.path.exists(wm_path):
+            self.world_model = WorldModel.load(wm_path, device=self.device, 
+                                             state_dim=self.state_dim, 
+                                             action_dim=self.action_dim,
+                                             physio_dim=self.physio_dim)
         else:
-            g = np.asarray(self.cfg.goal_state, dtype=np.float32).reshape(-1)
-            if g.size != self.state_dim:
-                raise ValueError(f"goal_state must have shape ({self.state_dim},)")
-            self.goal_state = g
-        self._default_goal_state = None if self.goal_state is None else self.goal_state.copy()
+            print("!!! World model not found. Using random")
+            self.world_model = WorldModel(self.state_dim, self.action_dim, self.physio_dim).to(self.device)
 
-    def _load_pool(self, path: str, dim: int) -> np.ndarray:
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Embedding pool not found at {path}. Run preprocessing first.")
-        payload = np.load(path, allow_pickle=True)
-        embeddings = np.asarray(payload["embeddings"], dtype=np.float32)
-        if embeddings.shape[1] < dim:
-            pad = np.zeros((embeddings.shape[0], dim - embeddings.shape[1]), dtype=np.float32)
-            embeddings = np.concatenate([embeddings, pad], axis=1)
-        elif embeddings.shape[1] > dim:
-            embeddings = embeddings[:, :dim]
-        return embeddings
+        # load context model-
+        ctx_path = resolve_path("context/checkpoints/context_model.pth")
+        self.context_model = ContextTransformer(input_dim=self.action_dim, hidden_dim=self.context_dim).to(self.device)
+        if os.path.exists(ctx_path):
+            self.context_model.load_state_dict(torch.load(ctx_path, map_location=self.device))
+            self.context_model.eval()
+        else:
+            print("!!! Context model not found")
 
-    def _compose_state(self) -> np.ndarray:
-        physio = self.physio_pool[int(self._rng.integers(0, len(self.physio_pool)))]
-        profile = self.profile_pool[int(self._rng.integers(0, len(self.profile_pool)))]
-        context = np.zeros(self.context_dim, dtype=float)
-        return np.concatenate([physio, profile, context], axis=0)
+        self._load_pools()
+        
+        self.max_steps = 50
+        self.history_window = 5 
+        self.history_buffer = deque(maxlen=self.history_window)
 
-    def reset(self, *, seed: int | None = None, options: Dict[str, Any] | None = None) -> Tuple[np.ndarray, Dict]:
+    def _load_pools(self):
+        try:
+            p_path = resolve_path(self.config['paths']['physio_embeddings'])
+            u_path = resolve_path(self.config['paths']['user_embeddings'])
+            self.physio_pool = np.load(p_path, allow_pickle=True)['embeddings']
+            self.user_pool = np.load(u_path, allow_pickle=True)['embeddings']
+        except:
+            self.physio_pool = np.zeros((10, self.physio_dim))
+            self.user_pool = np.zeros((10, self.user_dim))
+
+    def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        if seed is not None:
-            self._rng = np.random.default_rng(seed)
 
-        if options is not None and "goal_state" in options and options["goal_state"] is not None:
-            g = np.asarray(options["goal_state"], dtype=np.float32).reshape(-1)
-            if g.size != self.state_dim:
-                raise ValueError(f"goal_state must have shape ({self.state_dim},)")
-            self.goal_state = g
-        else:
-            self.goal_state = None if self._default_goal_state is None else self._default_goal_state.copy()
-
+        self.rng = np.random.default_rng(seed)
+        
+        u_idx = self.rng.integers(0, len(self.user_pool))
+        p_idx = self.rng.integers(0, len(self.physio_pool))
+        
+        self.current_user = self.user_pool[u_idx]
+        self.current_physio = self.physio_pool[p_idx]
+        
+        self.history_buffer.clear()
+        self.current_context = np.zeros(self.context_dim, dtype=np.float32)
+        
+        target_idx = self.rng.integers(0, len(self.physio_pool))
+        self.target_physio = self.physio_pool[target_idx]
+        
         self._t = 0
-        self.state = self._compose_state().astype(np.float32)
-        info = {"t": self._t}
-        return self.state, info
+        self.state = np.concatenate([self.current_physio, self.current_user, self.current_context])
+        
+        return self.state.astype(np.float32), {}
 
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict[str, Any]]:
+    def step(self, action):
+
         self._t += 1
-
-        a = np.asarray(action, dtype=np.float32).reshape(-1)
-        if a.size != self.action_dim:
-            if a.size < self.action_dim:
-                out = np.zeros(self.action_dim, dtype=np.float32)
-                out[: a.size] = a
-                a = out
-            else:
-                a = a[: self.action_dim]
-
-        a = np.clip(a, -self.cfg.action_clip, self.cfg.action_clip)
-
-        next_state = self.world_model.predict_next(self.state, a).astype(np.float32)
-        reward = float(self.world_model.reward(next_state, self.goal_state))
-
-        self.state = next_state
-
+        
+        self.history_buffer.append(action)
+        self.current_context = self._compute_context()
+        
+        prev_state_tensor = torch.FloatTensor(self.state).unsqueeze(0).to(self.device)
+        action_tensor = torch.FloatTensor(action).unsqueeze(0).to(self.device)
+        
+        with torch.no_grad():
+            next_physio_tensor = self.world_model(prev_state_tensor, action_tensor)
+            self.current_physio = next_physio_tensor.cpu().numpy()[0]
+            
+        self.state = np.concatenate([self.current_physio, self.current_user, self.current_context])
+        
+        reward = self._calculate_reward()
+        
         terminated = False
-        if self.goal_state is not None:
-            terminated = bool(np.linalg.norm(self.state - self.goal_state) < 1e-2)
-        truncated = self._t >= int(self.cfg.max_steps)
-        info = {"t": self._t}
+        truncated = self._t >= self.max_steps
+        
+        return self.state.astype(np.float32), reward, terminated, truncated, {}
 
-        return self.state, reward, terminated, truncated, info
+    def _compute_context(self):
+
+        if len(self.history_buffer) == 0:
+            return np.zeros(self.context_dim, dtype=np.float32)
+        
+        seq = np.array(self.history_buffer)
+        inp = torch.tensor(seq, dtype=torch.float32).unsqueeze(0).to(self.device)
+
+        with torch.no_grad():
+            ctx = self.context_model(inp) 
+
+        return ctx.cpu().numpy()[0]
+
+    def _calculate_reward(self):
+            """
+            Range: (-inf, 0]
+            """
+            diff = self.current_physio - self.target_physio
+            dist = np.linalg.norm(diff)
+
+            reward = -(dist / 100.0)
+            
+            return float(reward)

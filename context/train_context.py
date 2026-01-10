@@ -3,105 +3,157 @@ import torch.nn as nn
 import torch.optim as optim
 import numpy as np
 import os
+import pandas as pd
 from torch.utils.data import DataLoader, Dataset
 from context.sequence_model import ContextTransformer
+from utils.common import ensure_dir, load_config, resolve_path
 
-# --- Config ---
+# --- Configuration ---
 BATCH_SIZE = 32
-EPOCHS = 10
-SEQ_LEN = 5 # Look at last 5 songs to predict the 6th
-LR = 1e-3
-EMBEDDING_PATH = "data/processed/song_embeddings.npy"
-ID_MAP_PATH = "data/processed/song_id_map.npy"
+EPOCHS = 30
+LR = 5e-4
+SEQ_LEN = 5 # history window size
 
-# --- Dataset ---
 class SessionDataset(Dataset):
-    def __init__(self, seq_len=5):
-        """
-        Creates sequences from the static HKU956 listening order.
-        Since HKU956 is small, we simulate sessions by sliding a window 
-        over the song embeddings in the order they appear in the file (just for pre-training).
-        """
-        if not os.path.exists(EMBEDDING_PATH):
-            raise FileNotFoundError("Run 'process-audio' first to generate embeddings.")
-            
-        self.embeddings = np.load(EMBEDDING_PATH) # [N_songs, 768]
-        self.data = []
+    def __init__(self, ratings_path, embedding_path, id_map_path, seq_len=5, holdout_user=None):
         
-        # Create sliding windows: [0,1,2,3,4] -> Predict [5]
-        # In a real scenario, we would group by User Session.
-        # Here we just treat the dataset as one long 'global' radio stream for pre-training.
-        num_songs = len(self.embeddings)
-        for i in range(num_songs - seq_len):
-            window = self.embeddings[i : i+seq_len]
-            target = self.embeddings[i+seq_len]
-            self.data.append((window, target))
+        # raw data loading
+        self.embeddings = np.load(embedding_path) 
+        self.raw_ids = np.load(id_map_path)       
+        self.ratings = pd.read_csv(ratings_path)
+        
+        print(">> [Context] Mapping ratings to audio clips...")
+        if holdout_user:
+             print(f">> Excluding user: {holdout_user}")
+             self.ratings = self.ratings[self.ratings['participant_id'].astype(str) != str(holdout_user)]
+        
+        # build smart lookup table : mapping (songID, participantID) -> embedding_index  
+        
+        clip_groups = {}
+        
+        for idx, clip_name in enumerate(self.raw_ids):
+            # parse ID: "{sID}_{pID}_{chunk_idx}" (example 101_hku1901_0)
+            try:
+                parts = clip_name.split('_')
+                if len(parts) < 3: continue
+                
+                chunk_idx = int(parts[-1])
+                pid = parts[-2]
+                sid = "_".join(parts[:-2])
+                
+                key = (str(sid), str(pid))
+                if key not in clip_groups:
+                    clip_groups[key] = []
+                clip_groups[key].append((chunk_idx, idx))
+            except:
+                continue
+                
+        # resolve best representative for each song
+        self.lookup = {}
+        for key, candidates in clip_groups.items():
+            candidates.sort(key=lambda x: x[0])
+            best_embedding_idx = candidates[0][1]
+            self.lookup[key] = best_embedding_idx
             
+        print(f" >> Mapped {len(self.lookup)} unique Song-User pairs to embeddings")
+
+        self.sequences = []
+        self.targets = []
+        
+        # group ratings by user to form histories
+        user_groups = self.ratings.groupby('participant_id')
+        
+        for pid, group in user_groups:
+            sorted_group = group.sort_values('song_no')
+            song_ids = sorted_group['song_id'].astype(str).values
+            
+            # convert song IDs to embedding indices
+            indices = []
+            for sid in song_ids:
+                key = (str(sid), str(pid))
+                if key in self.lookup:
+                    indices.append(self.lookup[key])
+            
+            if len(indices) < seq_len + 1:
+                continue
+                
+            # sliding window logic
+            for i in range(len(indices) - seq_len):
+                hist_idx = indices[i : i+seq_len]
+                target_idx = indices[i+seq_len]
+                
+                self.sequences.append(self.embeddings[hist_idx])
+                self.targets.append(self.embeddings[target_idx])
+
     def __len__(self):
-        return len(self.data)
+        return len(self.sequences)
 
     def __getitem__(self, idx):
-        x, y = self.data[idx]
-        return torch.tensor(x, dtype=torch.float32), torch.tensor(y, dtype=torch.float32)
+        return (
+            torch.tensor(self.sequences[idx], dtype=torch.float32), 
+            torch.tensor(self.targets[idx], dtype=torch.float32)
+        )
 
-# --- Training Function ---
-def train_context_model():
-    print(f">> [Context] Loading Embeddings from {EMBEDDING_PATH}...")
+def train_context_model(config_path="configs/config.yaml"):
+    config = load_config(config_path)
+    paths = config.get("paths", {})
     
-    try:
-        dataset = SessionDataset(SEQ_LEN)
-    except FileNotFoundError:
-        print("❌ Error: Audio embeddings not found. Please run Option [5] first.")
+    emb_path = resolve_path("data/processed/song_embeddings.npy")
+    id_map_path = resolve_path("data/processed/song_id_map.npy")
+    ratings_path = resolve_path(paths.get("ratings_csv", "data/raw/HKU956/3. AV_ratings.csv"))
+    save_path = resolve_path("context/checkpoints/context_model.pth")
+    
+    ensure_dir(os.path.dirname(save_path))
+    
+    if not os.path.exists(emb_path):
+        print(" !!! Audio embeddings not found")
+        return
+
+    dataset = SessionDataset(ratings_path, emb_path, id_map_path, SEQ_LEN)
+    
+    if len(dataset) == 0:
+        print(" !!! Dataset empty")
         return
 
     dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
-
-    # Check the actual dimension of loaded data
-    sample_dim = dataset.embeddings.shape[1] 
-    print(f">> [Context] Detected Embedding Dimension: {sample_dim}")
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = ContextTransformer(input_dim=sample_dim).to(device)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
-    # We want the Context Vector to be close to the Next Song's Embedding
-    # But since dimensions differ (128 vs 768), we need a projection head for loss calc
-    predictor = nn.Linear(128, sample_dim).to(device)
+    # model setup (inpu 1024 (mert) -> output 128 (context))
+    model = ContextTransformer(input_dim=1024, hidden_dim=128).to(device)
+    
+    # predictor head ( 128 (Context) -> 1024 (predicted song embedding))
+    predictor = nn.Linear(128, 1024).to(device)
     
     optimizer = optim.Adam(list(model.parameters()) + list(predictor.parameters()), lr=LR)
     criterion = nn.MSELoss()
-
-    print(f">> [Context] Starting Pre-training on {len(dataset)} sequences...")
-    model.train()
+    
+    print(f">> [Context] Training on {len(dataset)} sequences...")
     
     for epoch in range(EPOCHS):
         total_loss = 0
+        model.train()
+        
         for x, y in dataloader:
             x, y = x.to(device), y.to(device)
-            
             optimizer.zero_grad()
             
-            # 1. Get Context Vector (History)
-            ctx_vector = model(x) # [32, 128]
+            # forward
+            ctx_vector = model(x)
+            pred_song = predictor(ctx_vector)
             
-            # 2. Predict Next Song Embedding
-            pred_next_song = predictor(ctx_vector) # [32, 768]
-            
-            # 3. Loss: Did we predict the acoustic features of the next song?
-            loss = criterion(pred_next_song, y)
+            loss = criterion(pred_song, y)
             
             loss.backward()
             optimizer.step()
-            
             total_loss += loss.item()
             
-        avg_loss = total_loss / len(dataloader)
-        print(f"   Epoch {epoch+1}/{EPOCHS} | Loss: {avg_loss:.4f}")
-
-    # Save
-    if not os.path.exists("context/checkpoints"):
-        os.makedirs("context/checkpoints")
-    torch.save(model.state_dict(), "context/checkpoints/context_model.pth")
-    print(">> ✅ Context Model Saved to context/checkpoints/context_model.pth")
+        if (epoch+1) % 5 == 0:
+            print(f"   Epoch {epoch+1}/{EPOCHS} | Loss: {total_loss/len(dataloader):.5f}")
+        
+    # save ONLY the encoder
+    torch.save(model.state_dict(), save_path)
+    print(f">> [Context] model saved to {save_path}")
 
 if __name__ == "__main__":
     train_context_model()

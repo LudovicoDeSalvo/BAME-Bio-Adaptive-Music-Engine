@@ -7,47 +7,63 @@ class PositionalEncoding(nn.Module):
         super().__init__()
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        
+        # sinusoidal Logic
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
+        
         self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x):
         return x + self.pe[:, :x.size(1), :]
 
 class ContextTransformer(nn.Module):
-    def __init__(self, input_dim=1024, hidden_dim=128, n_layers=2, n_heads=4):
+    def __init__(self, input_dim=1024, hidden_dim=128, n_layers=2, n_heads=4, dropout=0.1):
         """
+        Transformer Encoder that compresses a sequence of songs into a single Context Vector.
+        
         Args:
-            input_dim: Dimension of your audio embeddings (1024 for MERT-330M)
-            hidden_dim: Size of the output Context Vector
+            input_dim: 1024 (MERT Embedding Size)
+            hidden_dim: 128 (Context Vector Size)
         """
         super().__init__()
         
-        # 1. Project Input (e.g. 1024) to Internal Dim (128)
-        self.embedding = nn.Linear(input_dim, hidden_dim)
+        # 1024 -> 128
+        self.embedding = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout)
+        )
+        
+        # positional encoding
         self.pos_encoder = PositionalEncoding(hidden_dim)
         
-        # 2. Transformer Encoder
-        encoder_layers = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=n_heads, batch_first=True)
-        self.transformer = nn.TransformerEncoder(encoder_layers, num_layers=n_layers)
+        # transformer encoder
+        encoder_layer = nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=n_heads, 
+                                                 dim_feedforward=hidden_dim*4, 
+                                                 dropout=dropout, batch_first=True)
+        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
         
-        # 3. Output Head
+        # output head
         self.head = nn.Linear(hidden_dim, hidden_dim)
 
     def forward(self, x):
         """
-        Input: [Batch, Seq_Len, Input_Dim]
-        Output: [Batch, Hidden_Dim]
+        Input: [batch, seq_len, 1024]
+        Output: [batch, 128]
         """
-        # Embed & Position
-        x = self.embedding(x) # [B, S, H]
+        # embed
+        x = self.embedding(x)
         x = self.pos_encoder(x)
         
-        # Pass through Transformer
-        output = self.transformer(x) # [B, S, H]
+        # transform
+        x = self.transformer(x)
         
-        # Take the last vector in the sequence
-        last_state = output[:, -1, :] # [B, H]
+        # aggregation. shape: [Batch, 128]
+        last_state = x[:, -1, :]
         
-        return self.head(last_state)
+        # final projection
+        context_vector = self.head(last_state)
+        
+        return context_vector

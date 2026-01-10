@@ -9,43 +9,50 @@ class MusicRetrieval:
     def __init__(self):
         self.index = None
         self.song_ids = None
+        self.embeddings = None
         self.load_index()
 
     def load_index(self):
-        """Loads pre-computed embeddings and builds FAISS index."""
+
         if not os.path.exists(EMBEDDING_PATH):
-            raise FileNotFoundError(f"Run 'process-audio' first! Missing: {EMBEDDING_PATH}")
+            print(f" !!! Warning: embeddings not found at {EMBEDDING_PATH}")
+            return
 
-        # Load data
-        self.embeddings = np.load(EMBEDDING_PATH).astype('float32')
-        self.song_ids = np.load(ID_MAP_PATH)
-        
-        # Dimension of MERT embeddings (usually 768 or 1024 depending on layer)
-        d = self.embeddings.shape[1] 
-        
-        # Build Index (L2 Distance = Euclidean)
-        self.index = faiss.IndexFlatL2(d)
-        self.index.add(self.embeddings)
-        print(f"MusicRetrieval: Index built with {self.index.ntotal} songs.")
+        # load data
+        try:
+            self.embeddings = np.load(EMBEDDING_PATH, allow_pickle=True).astype('float32')
+            self.song_ids = np.load(ID_MAP_PATH, allow_pickle=True)
+            
+            d = self.embeddings.shape[1] 
+            self.index = faiss.IndexFlatL2(d)
+            self.index.add(self.embeddings)
 
-    def search(self, query_vector, k=1):
+            print(f"MusicRetrieval: index built with {self.index.ntotal} songs")
+        except Exception as e:
+            print(f" !!! Error loading index: {e}")
+
+    def search_candidates(self, query_vector, k=10):
         """
-        Input: query_vector (numpy array of shape (1, dim))
-        Output: list of song_ids
+        returns (ids, vectors)
         """
+        if self.index is None:
+            return [], []
+
         if query_vector.ndim == 1:
             query_vector = query_vector.reshape(1, -1)
             
-        distances, indices = self.index.search(query_vector.astype('float32'), k)
+        dists, indices = self.index.search(query_vector.astype('float32'), k)
         
-        # Map indices back to filenames/IDs
-        retrieved_ids = [self.song_ids[i] for i in indices[0]]
-        return retrieved_ids
+        # indices are [1, k]
+        valid_indices = indices[0]
+        
+        # index is -1 handling (not found)
+        valid_indices = [i for i in valid_indices if i != -1 and i < len(self.embeddings)]
+        
+        if not valid_indices:
+            return [], []
 
-# Test functionality
-if __name__ == "__main__":
-    retriever = MusicRetrieval()
-    # Fake query
-    fake_vec = np.random.rand(1, 768).astype('float32')
-    result = retriever.search(fake_vec)
-    print(f"Test Search Result: Nearest song is {result}")
+        candidate_vectors = self.embeddings[valid_indices] 
+        candidate_ids = [self.song_ids[i] for i in valid_indices]
+        
+        return candidate_ids, candidate_vectors
