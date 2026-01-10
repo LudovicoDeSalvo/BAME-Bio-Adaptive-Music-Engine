@@ -131,20 +131,19 @@ The Agent successfully navigates the physiological space, demonstrating robust c
 │   └── train_encoder.py    # Training script for Physio Module
 │
 ├── rl/
-│   ├── sac_agent.py        # Soft Actor-Critic (Actor & Critic Networks)
+│   ├── sac_agent.py        # Soft Actor-Critic
 │   ├── train_agent.py      # Main RL training loop
 │   └── wolpertinger.py     # KNN Action Selection Policy
 │
 ├── scripts/
-│   ├── setup/
-│   │   └── download_songs.py # Helper to fetch audio files
-│   ├── align_and_slice.py  # Data synchronization engine
+│   ├── download_songs.py   # Helper to fetch audio files
+│   ├── align_and_slice.py  # Data synchronization module
 │   └── inference.py        # Evaluation & Report generation
 │
 ├── simulator/
-│   ├── gym_env.py          # OpenAI Gym Environment Wrapper
+│   ├── gym_env.py          # Gym Environment Wrapper
 │   ├── train_simulator.py  # Training script for World Model
-│   └── world_model.py      # The Neural Physics Engine
+│   └── world_model.py      # The Neural Physio Engine
 │
 ├── user/
 │   ├── dcn_profile.py      # Deep Cross Network for User Traits
