@@ -1,4 +1,4 @@
-# 🎵 Bio-Adaptive Music Engine
+#  Bio-Adaptive Music Engine
 
 **A Closed-Loop AI System for Physiological State Regulation via Music**
 
@@ -10,7 +10,7 @@ The system learns a **World Model** of human physiology to simulate how differen
 
 ---
 
-## System Architecture
+## 💠 System Architecture
 
 ### 1. Sensing & Perception (The Encoders)
 
@@ -33,7 +33,7 @@ The system learns a **World Model** of human physiology to simulate how differen
 
 ---
 
-## Installation
+## 📦 Installation
 
 ### Setup
 
@@ -53,7 +53,7 @@ pip install -r renquirements.txt
 
 ---
 
-## Usage
+## ⚡ Usage
 
 The project is controlled via a central CLI dashboard.
 
@@ -105,7 +105,7 @@ The Agent successfully navigates the physiological space, demonstrating robust c
 
 * **Average Final Distance:** **3.12** units (High alignment with target).
 * **Max Improvement:** **+8.13** units (Drastic state change).
-* **Phenomenon Observed:** **Overcoming Homeostasis**. Unlike previous iterations where the user's biology naturally "drifted" back to baseline, the agent now actively reverses this drift. It proves capable of overriding biological inertia to driving the user significantly closer to the target state.
+* **Phenomenon Observed:** **Overcoming Homeostasis**. The agent actively counteracts the user's natural tendency to drift back to baseline. It demonstrates the capability to override biological inertia, effectively driving the physiological state significantly closer to the target configuration despite homeostatic resistance.
 
 ---
 
