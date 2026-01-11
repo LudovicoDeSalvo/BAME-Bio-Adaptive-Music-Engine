@@ -47,7 +47,7 @@ cd Bio-Adaptive-Music-Engine
 
 2. **Install Dependencies:**
 ```bash
-pip install -r renquirements.txt
+pip install -r requirements.txt
 
 ```
 
