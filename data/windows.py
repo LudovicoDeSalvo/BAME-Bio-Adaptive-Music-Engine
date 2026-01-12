@@ -9,7 +9,7 @@ SAMPLING_RATES = {
     "BVP": 64,
     "TEMP": 4,
     "HR": 1,
-    "IBI": 1  # Irregular
+    "IBI": 1 
 }
 
 N_STATS = 6 # mean, std, min, max, dynamic range, slope
