@@ -1,4 +1,4 @@
-#  Bio-Adaptive Music Engine
+#  Bio-Adaptive Music Engine (BAME)
 
 **A Closed-Loop AI System for Physiological State Regulation via Music**
 
