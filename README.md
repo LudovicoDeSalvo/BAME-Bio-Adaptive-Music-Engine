@@ -107,6 +107,8 @@ The Agent successfully navigates the physiological space, demonstrating robust c
 * **Max Improvement:** **+8.13** units (Drastic state change).
 * **Phenomenon Observed:** **Overcoming Homeostasis**. The agent actively counteracts the user's natural tendency to drift back to baseline. It demonstrates the capability to override biological inertia, effectively driving the physiological state significantly closer to the target configuration despite homeostatic resistance.
 
+⚠️: These results necessitate of real world experimentaion to be confirmed
+
 ---
 
 ## 📂 Project Structure
