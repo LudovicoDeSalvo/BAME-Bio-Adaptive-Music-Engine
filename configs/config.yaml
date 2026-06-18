@@ -31,7 +31,42 @@ training:
   seed: 42
   batch_size: 64
   gamma: 0.99
-  lr: 0.0003
-  max_steps: 50
+  lr: 0.0001
+  # Episode horizon. Real physio trajectories average ~2 chunks (max 20), so the
+  # old 50-step rollout was far outside any data support and let the world model
+  # drift to ~20 std. Matched to the data so rollouts stay in-distribution.
+  max_steps: 8
   action_clip: 1.0
+  # Fixed entropy temperature (auto-tune disabled) + gradient clipping. In the
+  # 1024-dim action space the auto-tuned alpha ran away and the summed log-prob
+  # entropy bonus inflated the Q target until the critic diverged. A small fixed
+  # alpha removes the inflation; clipping caps any residual loss blow-up.
+  alpha: 0.001
+  max_grad_norm: 10.0
+  # Band-aids for the continuous-action SAC over discrete songs:
+  # q_target_min: rewards are <=0, so clamp the bootstrap target to (q_target_min,
+  #   0]; the <=0 cap stops the critic's positive-overestimation divergence.
+  # expl_noise: decaying Gaussian noise on the proto-action to prevent collapse to
+  #   a single song (decays linearly to 0 over training).
+  q_target_min: -500.0
+  expl_noise: 0.3
+  # SAC reward scale. The reward is a dim-normalized RMS distance (~O(1)); in a
+  # 1024-dim action space the entropy term (alpha * sum_i log_prob) operates at a
+  # far larger magnitude and otherwise swamps the control signal. Scaling the
+  # reward is the canonical SAC lever for the reward/entropy trade-off.
+  reward_scale: 1.0
+  # SAC entropy target = -action_dim * target_entropy_scale. 1.0 = canonical
+  # heuristic (-action_dim); lower it (e.g. 0.5) if the alpha auto-tuner becomes
+  # unstable in the 1024-dim action space.
+  target_entropy_scale: 0.01
   holdout_user: "hku1903"   # user that will be excluded in training and used in inference
+
+simulator:
+  # World-model rollout-stability training. The model is trained on k-step
+  # rollouts (curriculum 1..rollout_depth) feeding its own physio prediction
+  # back in, so compounding error is penalized — the one-step-only loss let the
+  # rollout diverge. Depth is capped by data (most trials have <=3 transitions).
+  rollout_depth: 3
+  # Per-step delta bound passed to WorldModel: one step moves physio at most
+  # ~max_delta_scale std per dim. Structural guard against off-manifold jumps.
+  max_delta_scale: 1.0

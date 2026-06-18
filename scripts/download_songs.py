@@ -7,7 +7,29 @@ import os
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 INPUT_FILE = os.path.join(SCRIPT_DIR, '../data/raw/HKU956/2. original_song_audio.csv')
 OUTPUT_DIR = os.path.join(SCRIPT_DIR, '../data/raw/HKU956/2. audio_files')
-CLIENT_ID = '01ade0a2'
+
+def _load_env_local():
+    env_path = os.path.join(SCRIPT_DIR, '..', '.env.local')
+    if not os.path.exists(env_path):
+        return
+    with open(env_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith('#') or '=' not in line:
+                continue
+            key, _, value = line.partition('=')
+            os.environ.setdefault(key.strip(), value.strip().strip('"\''))
+
+_load_env_local()
+
+# Read the Jamendo client id from the environment; never hardcode credentials.
+CLIENT_ID = os.environ.get('JAMENDO_CLIENT_ID')
+if not CLIENT_ID:
+    raise RuntimeError(
+        "JAMENDO_CLIENT_ID environment variable not set. "
+        "Add it to .env.local (JAMENDO_CLIENT_ID=<your_id>) or "
+        "export it before running: export JAMENDO_CLIENT_ID=<your_id>"
+    )
 
 def execution():
     

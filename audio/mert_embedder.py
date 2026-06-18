@@ -6,13 +6,15 @@ import glob
 from transformers import Wav2Vec2FeatureExtractor, AutoModel
 from tqdm import tqdm
 
+from utils.common import resolve_path
+
 # --- Configuration ---
 
 MODEL_NAME = "m-a-p/MERT-v1-330M"
 TARGET_SR = 24000
-AUDIO_DIR = "data/processed/audio_clips"
-OUTPUT_PATH = os.path.join("data", "processed", "song_embeddings.npy")
-ID_MAP_PATH = os.path.join("data", "processed", "song_id_map.npy")
+AUDIO_DIR = resolve_path("data/processed/audio_clips")
+OUTPUT_PATH = resolve_path("data/processed/song_embeddings.npy")
+ID_MAP_PATH = resolve_path("data/processed/song_id_map.npy")
 
 class MERTExtractor:
 
@@ -60,15 +62,15 @@ class MERTExtractor:
                 
             return embedding
 
-        except Exception as e:
-            print(f"\n !!! ERROR processing {os.path.basename(file_path)}")
-            print(f"   Reason: {e}")
-            raise e 
+        except Exception:
+            # Let the extraction loop log + skip this file once (it already does);
+            # re-raising here without printing avoids the double error message.
+            raise
 
 def extract_all_embeddings():
 
-    if not os.path.exists("data/processed"):
-        os.makedirs("data/processed")
+    if not os.path.exists(resolve_path("data/processed")):
+        os.makedirs(resolve_path("data/processed"))
 
     if not os.path.exists(AUDIO_DIR):
         print(f" !!! Error: audio directory not found at: {AUDIO_DIR}")
@@ -97,27 +99,33 @@ def extract_all_embeddings():
             song_id = os.path.splitext(filename)[0]
             
             emb = extractor.process_audio(f_path)
-            
-            if emb is not None:
-                embeddings.append(emb)
-                song_ids.append(song_id)
+
+            embeddings.append(emb)
+            song_ids.append(song_id)
 
         except Exception as e:
-            print(f" !!! Error on file: {f_path}")
-            return # stop completely so we can fix
+            # One bad file must not abort the whole extraction.
+            print(f" !!! Error on file: {f_path} ({e}) -- skipping")
+            failed_count += 1
+            continue
 
     if len(embeddings) == 0:
         print(" !!! No embeddings were generated")
         return
 
-    # save
-    embeddings_np = np.vstack(embeddings)
+    # save: L2-normalize onto the unit sphere so song_embeddings.npy is the
+    # canonical action manifold shared by FAISS retrieval and world-model
+    # training (the actor's proto-action is normalized to match).
+    from utils.common import l2_normalize
+
+    embeddings_np = l2_normalize(np.vstack(embeddings), axis=1)
     song_ids_np = np.array(song_ids)
 
     np.save(OUTPUT_PATH, embeddings_np)
     np.save(ID_MAP_PATH, song_ids_np)
 
-    print(f" SUCCESS! Saved {embeddings_np.shape[0]} embeddings to {OUTPUT_PATH}")
+    print(f" SUCCESS! Saved {embeddings_np.shape[0]} embeddings to {OUTPUT_PATH} "
+          f"({failed_count} files skipped)")
 
 if __name__ == "__main__":
     extract_all_embeddings()

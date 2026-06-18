@@ -103,9 +103,6 @@ def setup_project():
 
     for f in folders:
         os.makedirs(os.path.join(ROOT_DIR, f), exist_ok=True)
-        init_file = os.path.join(ROOT_DIR, f, "__init__.py")
-        if not os.path.exists(init_file) and "data" not in f:
-            open(init_file, 'a').close()
 
     print(">> Folders created")
     
@@ -150,7 +147,7 @@ def align_and_slice():
     confirm = input("This will overwrite existing clips in 'data/processed. Continue? (y/n): ")
     if confirm.lower() == 'y':
 
-        clips_dir = "data/processed/audio_clips"
+        clips_dir = os.path.join(ROOT_DIR, "data/processed/audio_clips")
 
         if os.path.exists(clips_dir):
             files = glob.glob(os.path.join(clips_dir, "*.wav"))
@@ -159,14 +156,14 @@ def align_and_slice():
         safe_run("scripts.align_and_slice", "align_and_process")
 
 def process_audio():
-    if not os.path.exists("data/processed/audio_clips"):
+    if not os.path.exists(os.path.join(ROOT_DIR, "data/processed/audio_clips")):
         print("!!! Warning: 'audio_clips' folder missing")
         time.sleep(2)
     safe_run("audio.mert_embedder", "extract_all_embeddings")
 
 def verify_data():
 
-    path = "data/processed/physio_cache.npz"
+    path = os.path.join(ROOT_DIR, "data/processed/physio_cache.npz")
 
     if not os.path.exists(path):
         print(f"!!! File not found: {path}")
@@ -175,9 +172,9 @@ def verify_data():
         try:
             data = np.load(path, allow_pickle=True)
             print(f"\n--- DATASET STATISTICS ---")
-            print(f"Total samples (clips): {len(data['features'])}")
-            print(f"Physio feature dim:    {data['features'].shape[1]}")
+            print(f"Total samples (clips): {len(data['window_features'])}")
             print(f"Window tensor shape:   {data['window_features'].shape}")
+            print(f"Physio feature dim:    {data['window_features'].shape[2]}")
             print(f"Unique songs:          {len(np.unique(data['song_ids']))}")
             print(f"Unique participants:   {len(np.unique(data['participant_ids']))}")
             print("OK! Data aligned and ready for training.")
@@ -200,11 +197,24 @@ def train_world():
     safe_run("simulator.train_simulator", "train_world_model")
 
 def train_agent():
-    steps = input("Enter training steps (default 1000): ") or 1000
+    # Default must exceed the warmup (START_STEPS=1000) or the agent does 0 updates.
+    steps = input("Enter training steps (default 20000): ") or 20000
     safe_run("rl.train_agent", "train_sac_agent", steps=int(steps))
 
 def run_inference():
     safe_run("scripts.inference", "run_inference_protocol")
+
+def run_hyperparam_search():
+    steps = input("Steps per trial (default 6000): ") or 6000
+    method = (input("Method [grid/random] (default grid): ") or "grid").strip().lower()
+    trials = input("Trials for random method (default 12): ") or 12
+    safe_run("scripts.hyperparam_search", "run_hyperparam_search",
+             steps=int(steps), method=method, trials=int(trials))
+
+def run_controllability_probe():
+    targets = input("Number of (start,target) pairs (default 20): ") or 20
+    safe_run("scripts.controllability_probe", "run_controllability_probe",
+             targets=int(targets))
 
 # --- Interactive Menu ---
 
@@ -230,8 +240,10 @@ def interactive_menu():
 
         print("\n--- EVALUATION ---")
         print(" [9] Run Inference (Holdout User Evaluation)")
-        
+
         print("\n--- UTILITIES ---")
+        print(" [S] Hyperparameter Sweep (SAC Agent)")
+        print(" [P] Controllability Probe (Env Diagnostic)")
         print(" [H] System Health Check")
         print(" [Q] Quit")
         
@@ -247,6 +259,8 @@ def interactive_menu():
         elif choice == '7': train_world()   
         elif choice == '8': train_agent()
         elif choice == '9': run_inference()
+        elif choice == 's': run_hyperparam_search()
+        elif choice == 'p': run_controllability_probe()
         elif choice == 'h': check_system_health()
         elif choice == 'q': sys.exit(0)
         else: print("Invalid selection.")

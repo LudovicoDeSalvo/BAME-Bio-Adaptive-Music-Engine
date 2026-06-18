@@ -1,6 +1,27 @@
 import torch
 import torch.nn as nn
 
+
+def split_streams(windows):
+    """Split a [..., 30] per-window feature tensor into the encoder's two streams.
+
+    Channel layout is fixed by data.windows.compute_window_features:
+    EDA(0:6) BVP(6:12) TEMP(12:18) HR(18:24) IBI(24:30).
+      dermal = [EDA, TEMP]            -> 12 channels
+      cardio = [BVP, HR, IBI]         -> 18 channels
+    Single source of truth so training and inference can never drift into a
+    silent channel scramble. Works for [T, 30] or [B, T, 30] (last-axis slicing).
+    """
+    eda = windows[..., 0:6]
+    bvp = windows[..., 6:12]
+    temp = windows[..., 12:18]
+    hr = windows[..., 18:24]
+    ibi = windows[..., 24:30]
+    dermal = torch.cat([eda, temp], dim=-1)
+    cardio = torch.cat([bvp, hr, ibi], dim=-1)
+    return dermal, cardio
+
+
 class DualStreamEncoder(nn.Module):
     def __init__(self, hidden_dim=64, embedding_dim=64):
         super(DualStreamEncoder, self).__init__()
@@ -35,7 +56,7 @@ class DualStreamEncoder(nn.Module):
         self.projector = nn.Sequential(
             nn.Linear(fusion_dim, 128),
             nn.ReLU(),
-            nn.Dropout(0.2),
+            nn.Dropout(0.3),
             nn.Linear(128, embedding_dim) # 64 output
         )
 

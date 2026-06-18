@@ -6,11 +6,13 @@ class CrossLayer(nn.Module):
         super(CrossLayer, self).__init__()
 
         self.input_dim = input_dim
-        self.weight = nn.Parameter(torch.Tensor(input_dim))
-        self.bias = nn.Parameter(torch.Tensor(input_dim))
+        # 1-D weight/bias for the DCN cross interaction. Initialize explicitly
+        # (the old xavier-on-unsqueezed-view trick relied on a view aliasing the
+        # uninitialized parameter storage — functional but obscure).
+        self.weight = nn.Parameter(torch.empty(input_dim))
+        self.bias = nn.Parameter(torch.zeros(input_dim))
 
-        nn.init.xavier_uniform_(self.weight.unsqueeze(0))
-        nn.init.zeros_(self.bias)
+        nn.init.normal_(self.weight, mean=0.0, std=0.1)
 
     def forward(self, x0, x):
 

@@ -1,6 +1,4 @@
 # Datasets and large artifacts
-/HKU956/
-/HKU956.zip
 /data/raw/
 /data/processed/
 /models/
@@ -37,3 +35,16 @@
 /simulator/__pycache__
 /user/__pycache__
 /utils/__pycache__
+
+
+.claude
+.claude-flow
+.pytest_cache
+.swarm
+__pycache__
+.venv
+# hyperparameter sweep outputs
+rl/sweeps/
+
+# secrets
+.env.local

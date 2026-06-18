@@ -1,0 +1,9 @@
+{
+    "user_id": "hku1903",
+    "world_model_mse": 0.10496868938207626,
+    "persistence_mse": 0.11195597797632217,
+    "agent_avg_reward": -0.8214782254149516,
+    "agent_improvement": 0.05177618886033694,
+    "random_baseline_improvement": -0.18446271270513534,
+    "strategy": "Wolpertinger (k=10)"
+}
